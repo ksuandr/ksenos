@@ -177,16 +177,18 @@ def get_yandex_gpt_response(message, history):
         
         # Make synchronous completion request
         payload = {
-            "modelUri": "gpt://b1go5ot29mp5h51fb6o5/yandexgpt",
+            "modelUri": f"gpt://b1go5ot29mp5h51fb6o5/yandexgpt",
             "completionOptions": {
                 "stream": False,
                 "temperature": 0.6,
-                "maxTokens": 2000
+                "maxTokens": "2000"
             },
             "messages": messages
         }
         
         logger.info("Making request to YandexGPT API")
+        logger.info(f"Request payload: {json.dumps(payload, ensure_ascii=False)}")
+        
         response = requests.post(
             f"{base_url}/completion",
             headers=headers,
