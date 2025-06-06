@@ -3,6 +3,8 @@ import logging
 import random
 import json
 import requests
+import signal
+import sys
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -13,6 +15,21 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Global variable for the application
+application = None
+
+# Signal handler for graceful shutdown
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    logger.info("Received shutdown signal. Stopping bot...")
+    if application:
+        application.stop()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
 
 # Load environment variables
 load_dotenv()
@@ -289,6 +306,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 def main() -> None:
     """Starts the bot."""
     try:
+        global application
         logger.info("Starting bot initialization...")
         
         # Create application
@@ -308,13 +326,29 @@ def main() -> None:
         
         logger.info("All handlers registered successfully")
 
-        # Start the bot
+        # Start the bot with specific settings
         logger.info("Starting bot polling...")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,  # Ignore updates that arrived while bot was offline
+            close_loop=False  # Don't close the event loop after stopping
+        )
         
     except Exception as e:
         logger.error(f"Error in main bot thread: {str(e)}")
+        if application:
+            application.stop()
         raise
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+        if application:
+            application.stop()
+    except Exception as e:
+        logger.error(f"Fatal error: {str(e)}")
+        if application:
+            application.stop()
+        sys.exit(1)
