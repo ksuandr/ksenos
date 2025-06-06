@@ -156,7 +156,7 @@ async def feedback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте позже.")
 
 def get_yandex_gpt_response(message, history):
-    """Gets response from YandexGPT API using async completion."""
+    """Gets response from YandexGPT API."""
     try:
         # Prepare messages for sending
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -175,8 +175,8 @@ def get_yandex_gpt_response(message, history):
             "Authorization": f"Api-Key {YANDEX_API_KEY}"
         }
         
-        # Step 1: Initialize async completion
-        init_payload = {
+        # Make synchronous completion request
+        payload = {
             "modelUri": "gpt://b1go5ot29mp5h51fb6o5/yandexgpt",
             "completionOptions": {
                 "stream": False,
@@ -186,114 +186,70 @@ def get_yandex_gpt_response(message, history):
             "messages": messages
         }
         
-        logger.info("Initializing async completion with YandexGPT API")
-        init_response = requests.post(
-            f"{base_url}/completionAsync",
+        logger.info("Making request to YandexGPT API")
+        response = requests.post(
+            f"{base_url}/completion",
             headers=headers,
-            json=init_payload,
+            json=payload,
             timeout=60
         )
         
-        if init_response.status_code != 200:
-            logger.error(f"Error initializing async completion: {init_response.status_code}")
-            logger.error(f"Response content: {init_response.text}")
-            raise Exception(f"Failed to initialize async completion: {init_response.status_code}")
+        if response.status_code != 200:
+            logger.error(f"Error from API: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
+            raise Exception(f"API request failed with status code: {response.status_code}")
         
-        init_data = init_response.json()
-        logger.info(f"Initial response: {init_data}")
+        result = response.json()
+        logger.info(f"API response: {result}")
         
-        operation_id = init_data.get("id")
-        if not operation_id:
-            logger.error(f"No operation ID in response: {init_data}")
-            raise Exception("No operation ID received")
-        
-        logger.info(f"Received operation ID: {operation_id}")
-        
-        # Step 2: Poll for results
-        max_attempts = 30
-        poll_interval = 2
-        
-        for attempt in range(max_attempts):
-            logger.info(f"Polling attempt {attempt + 1}/{max_attempts}")
+        try:
+            # Extract the response text from the result
+            alternatives = result.get("result", {}).get("alternatives", [])
+            if not alternatives:
+                raise KeyError("No alternatives in response")
             
-            poll_response = requests.get(
-                f"{base_url}/operations/{operation_id}",
-                headers=headers,
-                timeout=30
-            )
+            message = alternatives[0].get("message", {})
+            if not message:
+                raise KeyError("No message in first alternative")
             
-            if poll_response.status_code != 200:
-                logger.error(f"Error polling for results: {poll_response.status_code}")
-                logger.error(f"Response content: {poll_response.text}")
-                raise Exception(f"Failed to poll for results: {poll_response.status_code}")
+            response_text = message.get("text")
+            if not response_text:
+                raise KeyError("No text in message")
             
-            poll_result = poll_response.json()
-            logger.info(f"Poll result: {poll_result}")
+            # Check if response starts with state in brackets
+            if not response_text.startswith('[Состояние:'):
+                state = random.choice(CLOUD_STATES)
+                response_text = f"[Состояние: {state}]\n\n{response_text}"
             
-            # Check if operation is done
-            if poll_result.get("done", False):
-                if "response" in poll_result:
-                    result = poll_result["response"]
-                    logger.info(f"Full API response: {result}")
-                    
-                    try:
-                        # Extract the response text from the result
-                        alternatives = result.get("alternatives", [])
-                        if not alternatives:
-                            raise KeyError("No alternatives in response")
-                        
-                        message = alternatives[0].get("message", {})
-                        if not message:
-                            raise KeyError("No message in first alternative")
-                        
-                        response_text = message.get("text")
-                        if not response_text:
-                            raise KeyError("No text in message")
-                        
-                        # Check if response starts with state in brackets
-                        if not response_text.startswith('[Состояние:'):
-                            state = random.choice(CLOUD_STATES)
-                            response_text = f"[Состояние: {state}]\n\n{response_text}"
-                        
-                        logger.info(f"Successfully processed response text: {response_text[:100]}...")
-                        
-                        # Check response length for Telegram (maximum 4096 characters)
-                        if len(response_text) > 4000:
-                            parts = response_text.split("\n\n")
-                            responses = []
-                            current_part = ""
-                            
-                            for part in parts:
-                                if len(current_part) + len(part) + 4 <= 4000:
-                                    if current_part:
-                                        current_part += "\n\n" + part
-                                    else:
-                                        current_part = part
-                                else:
-                                    responses.append(current_part)
-                                    current_part = part
-                            
-                            if current_part:
-                                responses.append(current_part)
-                            
-                            return responses
-                        
-                        return [response_text]
-                        
-                    except KeyError as e:
-                        logger.error(f"Error extracting response: {str(e)}")
-                        logger.error(f"Response structure: {result}")
-                        raise Exception(f"Invalid response structure: {str(e)}")
-                        
-                else:
-                    error_info = poll_result.get("error", {})
-                    error_message = error_info.get("message", "Unknown error")
-                    logger.error(f"Operation failed: {error_message}")
-                    raise Exception(f"Operation failed: {error_message}")
+            logger.info(f"Successfully processed response text: {response_text[:100]}...")
             
-            time.sleep(poll_interval)
-        
-        raise Exception("Timeout waiting for response")
+            # Check response length for Telegram
+            if len(response_text) > 4000:
+                parts = response_text.split("\n\n")
+                responses = []
+                current_part = ""
+                
+                for part in parts:
+                    if len(current_part) + len(part) + 4 <= 4000:
+                        if current_part:
+                            current_part += "\n\n" + part
+                        else:
+                            current_part = part
+                    else:
+                        responses.append(current_part)
+                        current_part = part
+                
+                if current_part:
+                    responses.append(current_part)
+                
+                return responses
+            
+            return [response_text]
+            
+        except KeyError as e:
+            logger.error(f"Error extracting response: {str(e)}")
+            logger.error(f"Response structure: {result}")
+            raise Exception(f"Invalid response structure: {str(e)}")
         
     except Exception as e:
         logger.error(f"Error in YandexGPT API request: {str(e)}")
