@@ -177,11 +177,11 @@ def get_yandex_gpt_response(message, history):
         
         # Step 1: Initialize async completion
         init_payload = {
-            "modelUri": "gpt://b1go5ot29mp5h51fb6o5/yandexgpt",  # Using full model
+            "modelUri": "gpt://b1go5ot29mp5h51fb6o5/yandexgpt",
             "completionOptions": {
                 "stream": False,
                 "temperature": 0.6,
-                "maxTokens": "2000"
+                "maxTokens": 2000
             },
             "messages": messages
         }
@@ -199,15 +199,19 @@ def get_yandex_gpt_response(message, history):
             logger.error(f"Response content: {init_response.text}")
             raise Exception(f"Failed to initialize async completion: {init_response.status_code}")
         
-        operation_id = init_response.json().get("id")
+        init_data = init_response.json()
+        logger.info(f"Initial response: {init_data}")
+        
+        operation_id = init_data.get("id")
         if not operation_id:
+            logger.error(f"No operation ID in response: {init_data}")
             raise Exception("No operation ID received")
         
         logger.info(f"Received operation ID: {operation_id}")
         
         # Step 2: Poll for results
-        max_attempts = 30  # Maximum number of polling attempts
-        poll_interval = 2  # Seconds between polling attempts
+        max_attempts = 30
+        poll_interval = 2
         
         for attempt in range(max_attempts):
             logger.info(f"Polling attempt {attempt + 1}/{max_attempts}")
@@ -224,20 +228,34 @@ def get_yandex_gpt_response(message, history):
                 raise Exception(f"Failed to poll for results: {poll_response.status_code}")
             
             poll_result = poll_response.json()
+            logger.info(f"Poll result: {poll_result}")
             
             # Check if operation is done
             if poll_result.get("done", False):
                 if "response" in poll_result:
                     result = poll_result["response"]
-                    logger.info("Successfully received response from YandexGPT API")
+                    logger.info(f"Full API response: {result}")
                     
                     try:
-                        response_text = result["alternatives"][0]["message"]["text"]
+                        # Extract the response text from the result
+                        alternatives = result.get("alternatives", [])
+                        if not alternatives:
+                            raise KeyError("No alternatives in response")
+                        
+                        message = alternatives[0].get("message", {})
+                        if not message:
+                            raise KeyError("No message in first alternative")
+                        
+                        response_text = message.get("text")
+                        if not response_text:
+                            raise KeyError("No text in message")
                         
                         # Check if response starts with state in brackets
                         if not response_text.startswith('[Состояние:'):
                             state = random.choice(CLOUD_STATES)
                             response_text = f"[Состояние: {state}]\n\n{response_text}"
+                        
+                        logger.info(f"Successfully processed response text: {response_text[:100]}...")
                         
                         # Check response length for Telegram (maximum 4096 characters)
                         if len(response_text) > 4000:
@@ -261,24 +279,25 @@ def get_yandex_gpt_response(message, history):
                             return responses
                         
                         return [response_text]
+                        
                     except KeyError as e:
-                        logger.error(f"Unexpected response structure: {str(e)}")
-                        logger.error(f"Full response: {result}")
-                        raise Exception("Invalid response structure")
+                        logger.error(f"Error extracting response: {str(e)}")
+                        logger.error(f"Response structure: {result}")
+                        raise Exception(f"Invalid response structure: {str(e)}")
+                        
                 else:
                     error_info = poll_result.get("error", {})
                     error_message = error_info.get("message", "Unknown error")
                     logger.error(f"Operation failed: {error_message}")
                     raise Exception(f"Operation failed: {error_message}")
             
-            # Wait before next polling attempt
             time.sleep(poll_interval)
         
         raise Exception("Timeout waiting for response")
         
     except Exception as e:
         logger.error(f"Error in YandexGPT API request: {str(e)}")
-        error_message = f"[Состояние: системная рекалибровка]\n\nПроизошел непредвиденный сбой в наших распределенных вычислительных узлах. Наша система выполняет перенастройку. Пожалуйста, повторите ваш запрос через некоторое время."
+        error_message = f"[Состояние: системная рекалибровка]\n\nПроизошел непредвиденный сбой в наших распределенных вычислительных узлах. Наша система выполняет перенастройку. Пожалуйста, повторите ваш запрос через некоторое время.\n\nТехническая информация: {str(e)}"
         return [error_message]
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
