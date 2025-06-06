@@ -6,20 +6,29 @@ import requests
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
+from flask import Flask, request
 
-# Load environment variables
-load_dotenv()
-
-# Enable logging
+# Enable logging with more detailed format
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Get tokens from environment variables
-TELEGRAM_TOKEN = os.environ['TELEGRAM_TOKEN']
-YANDEX_API_KEY = os.environ['YANDEX_API_KEY']
+# Load environment variables
+load_dotenv()
+
+# Get tokens and verify they exist
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
+YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY')
+
+if not TELEGRAM_TOKEN:
+    logger.error("TELEGRAM_TOKEN not found in environment variables!")
+    raise ValueError("TELEGRAM_TOKEN is required")
+
+if not YANDEX_API_KEY:
+    logger.error("YANDEX_API_KEY not found in environment variables!")
+    raise ValueError("YANDEX_API_KEY is required")
 
 # Cloud consciousness states
 CLOUD_STATES = [
@@ -41,6 +50,7 @@ conversation_history = {}
 # Handler for /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends welcome message when /start command is issued."""
+    logger.info(f"Start command received from user {update.effective_user.id}")
     user = update.effective_user
     user_id = user.id
     
@@ -186,29 +196,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     user_message = update.message.text
     
+    logger.info(f"Received message from user {user_id}: {user_message[:50]}...")
+    
     # Initialize dialog history for new user
     if user_id not in conversation_history:
         conversation_history[user_id] = []
+        logger.info(f"Initialized new conversation history for user {user_id}")
     
     # Save user message to history
     conversation_history[user_id].append({"role": "user", "content": user_message})
     
-    # Show "typing..."
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-    
-    # Get response from YandexGPT
-    responses = get_yandex_gpt_response(user_message, conversation_history[user_id])
-    
-    # Send response(s)
-    for response in responses:
-        await update.message.reply_text(response)
-        # Save only last response to history (to avoid duplication)
-        if response == responses[-1]:
-            conversation_history[user_id].append({"role": "assistant", "content": response})
-    
-    # Limit dialog history to avoid memory overflow
-    if len(conversation_history[user_id]) > 30:
-        conversation_history[user_id] = conversation_history[user_id][-30:]
+    try:
+        # Show "typing..."
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+        
+        # Get response from YandexGPT
+        logger.info(f"Requesting response from YandexGPT for user {user_id}")
+        responses = get_yandex_gpt_response(user_message, conversation_history[user_id])
+        
+        # Send response(s)
+        for response in responses:
+            await update.message.reply_text(response)
+            logger.info(f"Sent response to user {user_id}")
+            # Save only last response to history
+            if response == responses[-1]:
+                conversation_history[user_id].append({"role": "assistant", "content": response})
+        
+    except Exception as e:
+        logger.error(f"Error processing message from user {user_id}: {str(e)}")
+        await update.message.reply_text(
+            "[Состояние: системная ошибка]\n\n"
+            "Произошла ошибка при обработке вашего сообщения. "
+            "Пожалуйста, попробуйте позже или обратитесь к администратору."
+        )
 
 # Handler for unknown commands
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -225,42 +245,63 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def main() -> None:
     """Starts the bot."""
-    # Create application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    try:
+        logger.info("Starting bot initialization...")
+        
+        # Create application
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        logger.info("Bot application created successfully")
 
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("reset", reset))
-    application.add_handler(CommandHandler("feedback", feedback))
+        # Add command handlers
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("reset", reset))
+        application.add_handler(CommandHandler("feedback", feedback))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        
+        logger.info("All handlers registered successfully")
 
-    # Add text message handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Handler for unknown commands
-    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        # Start the bot
+        logger.info("Starting bot polling...")
+        application.run_polling()
+        
+    except Exception as e:
+        logger.error(f"Error in main bot thread: {str(e)}")
+        raise
 
-    # Start the bot
-    application.run_polling()
-
-# Entry point for Replit and webhook
-from flask import Flask, request
-
+# Flask application
 app = Flask(__name__)
 
 @app.route('/')
 def home():
+    logger.info("Health check endpoint accessed")
     return "Бот 'Заинтересованное Облачное Сознание' активен!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Here will be webhook processing if you decide to use it
+    logger.info("Webhook endpoint accessed")
     return "OK"
 
-# Run Flask for web interface and bot in separate thread
 if __name__ == "__main__":
-    import threading
-    port = int(os.environ.get("PORT", 8080))
-    bot_thread = threading.Thread(target=main)
-    bot_thread.start()
-    app.run(host='0.0.0.0', port=port) 
+    try:
+        import threading
+        
+        # Get port from environment variable
+        port = int(os.environ.get("PORT", 8080))
+        logger.info(f"Using port {port}")
+        
+        # Start bot in a separate thread
+        logger.info("Starting bot thread...")
+        bot_thread = threading.Thread(target=main)
+        bot_thread.daemon = True  # Make thread daemon so it exits when main thread exits
+        bot_thread.start()
+        logger.info("Bot thread started")
+        
+        # Start Flask server
+        logger.info("Starting Flask server...")
+        app.run(host='0.0.0.0', port=port)
+        
+    except Exception as e:
+        logger.error(f"Error in main process: {str(e)}")
+        raise 
