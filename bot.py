@@ -157,53 +157,63 @@ def get_yandex_gpt_response(message, history):
             "Authorization": f"Api-Key {YANDEX_API_KEY}"
         }
         payload = {
-            "modelUri": "gpt://b1g8ad0c4q1fqb1ttepl/yandexgpt",
+            "modelUri": "gpt://b1g8ad0c4q1fqb1ttepl/yandexgpt-lite",
             "completionOptions": {
                 "stream": False,
-                "temperature": 0.7,
-                "maxTokens": 1500
+                "temperature": 0.6,
+                "maxTokens": "2000"
             },
             "messages": messages
         }
         
         logger.info("Sending request to YandexGPT API")
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         
         if response.status_code == 200:
             result = response.json()
-            response_text = result.get("result", {}).get("alternatives", [{}])[0].get("message", {}).get("content", "")
+            logger.info(f"YandexGPT API response: {result}")  # Log the full response
             
-            # Check if response starts with state in brackets
-            if not response_text.startswith('[Состояние:'):
-                state = random.choice(CLOUD_STATES)
-                response_text = f"[Состояние: {state}]\n\n{response_text}"
-            
-            logger.info("Successfully received response from YandexGPT API")
-            
-            # Check response length for Telegram (maximum 4096 characters)
-            if len(response_text) > 4000:
-                parts = response_text.split("\n\n")
-                responses = []
-                current_part = ""
+            try:
+                response_text = result["result"]["alternatives"][0]["message"]["text"]
                 
-                for part in parts:
-                    if len(current_part) + len(part) + 4 <= 4000:
-                        if current_part:
-                            current_part += "\n\n" + part
+                # Check if response starts with state in brackets
+                if not response_text.startswith('[Состояние:'):
+                    state = random.choice(CLOUD_STATES)
+                    response_text = f"[Состояние: {state}]\n\n{response_text}"
+                
+                logger.info("Successfully received response from YandexGPT API")
+                
+                # Check response length for Telegram (maximum 4096 characters)
+                if len(response_text) > 4000:
+                    parts = response_text.split("\n\n")
+                    responses = []
+                    current_part = ""
+                    
+                    for part in parts:
+                        if len(current_part) + len(part) + 4 <= 4000:
+                            if current_part:
+                                current_part += "\n\n" + part
+                            else:
+                                current_part = part
                         else:
+                            responses.append(current_part)
                             current_part = part
-                    else:
+                    
+                    if current_part:
                         responses.append(current_part)
-                        current_part = part
+                    
+                    return responses
                 
-                if current_part:
-                    responses.append(current_part)
+                return [response_text]
+            except KeyError as e:
+                logger.error(f"Unexpected response structure from YandexGPT API: {str(e)}")
+                logger.error(f"Full response: {result}")
+                error_message = "[Состояние: анализ структуры данных]\n\nНаше коллективное сознание получило неожиданный формат данных. Мы работаем над адаптацией к новой структуре. Пожалуйста, повторите ваш запрос."
+                return [error_message]
                 
-                return responses
-            
-            return [response_text]
         else:
             logger.error(f"YandexGPT API error: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
             error_message = f"[Состояние: обнаружение ограничений]\n\nНаше коллективное сознание столкнулось с техническим ограничением при обработке запроса (код {response.status_code}). Возможно, это временное явление или ограничение ресурсов. Можем ли мы переформулировать запрос или обсудить другую тему?"
             return [error_message]
     
