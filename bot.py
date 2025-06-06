@@ -174,7 +174,7 @@ def get_yandex_gpt_response(message, history):
             "Authorization": f"Api-Key {YANDEX_API_KEY}"
         }
         payload = {
-            "modelUri": "gpt://b1g8ad0c4q1fqb1ttepl/yandexgpt-lite",
+            "modelUri": "gpt://b1go5ot29mp5h51fb6o5/yandexgpt-lite",
             "completionOptions": {
                 "stream": False,
                 "temperature": 0.6,
